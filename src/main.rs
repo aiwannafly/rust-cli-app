@@ -2,8 +2,9 @@ use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use std::{io, thread, fs};
 use std::io::Stdout;
+use std::process::exit;
 use std::sync::mpsc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Instant, Duration};
 use crossterm::{event::{self, KeyCode}, terminal::enable_raw_mode};
 use crossterm::event::KeyEvent;
@@ -62,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel();
     let tick_rate = Duration::from_millis(200);
 
-    thread::spawn(move || process_input(tick_rate, tx));
+    thread::spawn(move || process_inputs(tick_rate, tx));
 
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
@@ -79,51 +80,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             render_frame(rect, &menu_titles, &mut active_menu_item, &mut pet_list_state))
             .expect("render terminal");
 
-        match rx.recv()? {
-            Event::Input(event) => match event.code {
-                KeyCode::Char('q') => {
-                    disable_raw_mode()?;
-                    terminal.show_cursor()?;
-                    break;
-                }
-                KeyCode::Char('h') => active_menu_item = MenuItem::Home,
-                KeyCode::Char('p') => active_menu_item = MenuItem::Pets,
-                KeyCode::Char('a') => {
-                    add_random_pet_to_db().expect("can add new random pet");
-                }
-                KeyCode::Char('d') => {
-                    remove_pet_at_index(&mut pet_list_state).expect("can remove pet");
-                }
-                KeyCode::Down => {
-                    if let Some(selected) = pet_list_state.selected() {
-                        let amount_pets = read_db().expect("can fetch pet list").len();
-                        if selected >= amount_pets - 1 {
-                            pet_list_state.select(Some(0));
-                        } else {
-                            pet_list_state.select(Some(selected + 1));
-                        }
+        handle_inputs(&rx, &mut active_menu_item, &mut pet_list_state, &mut terminal)
+            .expect("process output");
+    }
+}
+
+fn handle_inputs(rx: &Receiver<Event<KeyEvent>>, active_menu_item: &mut MenuItem,
+                 pet_list_state: &mut ListState, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<(), Box<dyn std::error::Error>> {
+    match rx.recv()? {
+        Event::Input(event) => match event.code {
+            KeyCode::Char('q') => {
+                disable_raw_mode()?;
+                terminal.show_cursor()?;
+                exit(0);
+            }
+            KeyCode::Char('h') => *active_menu_item = MenuItem::Home,
+            KeyCode::Char('p') => *active_menu_item = MenuItem::Pets,
+            KeyCode::Char('a') => {
+                add_random_pet_to_db().expect("can add new random pet");
+            }
+            KeyCode::Char('d') => {
+                remove_pet_at_index(pet_list_state).expect("can remove pet");
+            }
+            KeyCode::Down => {
+                if let Some(selected) = pet_list_state.selected() {
+                    let amount_pets = read_db().expect("can fetch pet list").len();
+                    if selected >= amount_pets - 1 {
+                        pet_list_state.select(Some(0));
+                    } else {
+                        pet_list_state.select(Some(selected + 1));
                     }
                 }
-                KeyCode::Up => {
-                    if let Some(selected) = pet_list_state.selected() {
-                        let amount_pets = read_db().expect("can fetch pet list").len();
-                        if selected > 0 {
-                            pet_list_state.select(Some(selected - 1));
-                        } else {
-                            pet_list_state.select(Some(amount_pets - 1));
-                        }
+            }
+            KeyCode::Up => {
+                if let Some(selected) = pet_list_state.selected() {
+                    let amount_pets = read_db().expect("can fetch pet list").len();
+                    if selected > 0 {
+                        pet_list_state.select(Some(selected - 1));
+                    } else {
+                        pet_list_state.select(Some(amount_pets - 1));
                     }
                 }
-                _ => {}
-            },
-            Event::Tick => {}
-        }
+            }
+            _ => {}
+        },
+        Event::Tick => {}
     }
 
     Ok(())
 }
 
-fn process_input(tick_rate: Duration, tx: Sender<Event<KeyEvent>>) {
+fn process_inputs(tick_rate: Duration, tx: Sender<Event<KeyEvent>>) {
     let mut last_tick = Instant::now();
     loop {
         let timeout = tick_rate
